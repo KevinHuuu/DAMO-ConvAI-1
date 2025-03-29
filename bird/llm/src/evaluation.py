@@ -1,8 +1,11 @@
+import os
 import sys
 import json
-import argparse
+import time
 import sqlite3
-import multiprocessing as mp
+import argparse
+import multiprocessing
+from tqdm import tqdm
 from func_timeout import func_timeout, FunctionTimedOut
 
 def load_json(dir):
@@ -15,17 +18,37 @@ def result_callback(result):
 
 
 def execute_sql(predicted_sql,ground_truth, db_path):
-    conn = sqlite3.connect(db_path)
-    # Connect to the database
-    cursor = conn.cursor()
-    cursor.execute(predicted_sql)
-    predicted_res = cursor.fetchall()
-    cursor.execute(ground_truth)
-    ground_truth_res = cursor.fetchall()
-    res = 0
-    if set(predicted_res) == set(ground_truth_res):
-        res = 1
-    return res
+    print(f"DEBUG: 执行SQL: {predicted_sql}")
+    print(f"DEBUG: 标准答案: {ground_truth}")
+    print(f"DEBUG: 数据库路径: {db_path}")
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        # Connect to the database
+        cursor = conn.cursor()
+        
+        # 执行预测的SQL
+        cursor.execute(predicted_sql)
+        predicted_res = cursor.fetchall()
+        print(f"DEBUG: 预测结果: {predicted_res}")
+        
+        # 执行标准答案
+        cursor.execute(ground_truth)
+        ground_truth_res = cursor.fetchall()
+        print(f"DEBUG: 标准结果: {ground_truth_res}")
+        
+        # 比较结果
+        print(f"DEBUG: 预测结果集合: {set(predicted_res)}")
+        print(f"DEBUG: 标准结果集合: {set(ground_truth_res)}")
+        print(f"DEBUG: 结果是否相等: {set(predicted_res) == set(ground_truth_res)}")
+        
+        res = 0
+        if set(predicted_res) == set(ground_truth_res):
+            res = 1
+        return res
+    except Exception as e:
+        print(f"DEBUG: SQL执行错误: {e}")
+        return 0
 
 
 
@@ -73,11 +96,16 @@ def package_sqls(sql_path, db_root_path, mode='gpt', data_mode='dev'):
     return clean_sqls, db_path_list
 
 def run_sqls_parallel(sqls, db_places, num_cpus=1, meta_time_out=30.0):
-    pool = mp.Pool(processes=num_cpus)
+    pool = multiprocessing.Pool(processes=num_cpus)
     for i,sql_pair in enumerate(sqls):
-
         predicted_sql, ground_truth = sql_pair
+        print(f"DEBUG: 索引 {i}")
+        print(f"DEBUG: predicted_sql = '{predicted_sql}'")
+        print(f"DEBUG: ground_truth = '{ground_truth}'")
+        print(f"DEBUG: db_path = '{db_places[i]}'")
         pool.apply_async(execute_model, args=(predicted_sql, ground_truth, db_places[i], i, meta_time_out), callback=result_callback)
+        # import pdb
+        # 在这里打印所有的value 我想看看 predicted_sql, ground_truth 还有别的
     pool.close()
     pool.join()
 
@@ -85,9 +113,16 @@ def sort_results(list_of_dicts):
   return sorted(list_of_dicts, key=lambda x: x['sql_idx'])
 
 def compute_acc_by_diff(exec_results,diff_json_path):
+    # 打印调试信息
+    print("DEBUG: exec_results =", json.dumps(exec_results, indent=2))
+    print("DEBUG: diff_json_path =", diff_json_path)
+    
+    # 打印加载的JSON内容
+    contents = load_json(diff_json_path)
+    print("DEBUG: contents =", json.dumps(contents, indent=2))
+    
     num_queries = len(exec_results)
     results = [res['res'] for res in exec_results]
-    contents = load_json(diff_json_path)
     simple_results, moderate_results, challenging_results = [], [], []
 
     for i,content in enumerate(contents):
@@ -150,4 +185,3 @@ if __name__ == '__main__':
     print_data(score_lists,count_lists)
     print('===========================================================================================')
     print("Finished evaluation")
-    
